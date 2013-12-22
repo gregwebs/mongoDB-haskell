@@ -54,7 +54,7 @@ import qualified System.IO.Pipeline as P
 
 -- * Pipe
 
-type Pipe = Pipeline Response Message
+type Pipe = Pipeline Message Reply
 -- ^ Thread-safe TCP connection with pipelined requests
 
 newPipe :: Handle -> IO Pipe
@@ -65,15 +65,11 @@ send :: Pipe -> [Notice] -> IOE ()
 -- ^ Send notices as a contiguous batch to server with no reply. Throw IOError if connection fails.
 send pipe notices = P.send pipe (notices, Nothing)
 
-call :: Pipe -> [Notice] -> Request -> IOE (IOE Reply)
+call :: Pipe -> [Notice] -> Request -> IOE Reply
 -- ^ Send notices and request as a contiguous batch to server and return reply promise, which will block when invoked until reply arrives. This call and resulting promise will throw IOError if connection fails.
 call pipe notices request = do
 	requestId <- genRequestId
-	promise <- P.call pipe (notices, Just (request, requestId))
-	return $ check requestId <$> promise
- where
-	check requestId (responseTo, reply) = if requestId == responseTo then reply else
-		error $ "expected response id (" ++ show responseTo ++ ") to match request id (" ++ show requestId ++ ")"
+	P.call pipe (notices, Just (request, requestId))
 
 -- * Message
 
@@ -96,10 +92,7 @@ writeMessage handle (notices, mRequest) = ErrorT . try $ do
 		lenBytes = encodeSize . toEnum . fromEnum $ L.length bytes
 	encodeSize = runPut . putInt32 . (+ 4)
 
-type Response = (ResponseTo, Reply)
--- ^ Message received from a Mongo server in response to a Request
-
-readMessage :: Handle -> IOE Response
+readMessage :: Handle -> IOE Reply
 -- ^ read response from socket
 readMessage handle = ErrorT $ try readResp  where
 	readResp = do
@@ -117,8 +110,6 @@ type Opcode = Int32
 type RequestId = Int32
 -- ^ A fresh request id is generated for every message
 
-type ResponseTo = RequestId
-
 genRequestId :: (MonadIO m) => m RequestId
 -- ^ Generate fresh request id
 genRequestId = liftIO $ atomicModifyIORef counter $ \n -> (n + 1, n) where
@@ -135,13 +126,13 @@ putHeader opcode requestId = do
 	putInt32 0
 	putInt32 opcode
 
-getHeader :: Get (Opcode, ResponseTo)
+getHeader :: Get Opcode
 -- ^ Note, does not read message length (first int32), assumes it was already read
 getHeader = do
 	_requestId <- getInt32
-	responseTo <- getInt32
+	_responseTo <- getInt32
 	opcode <- getInt32
-	return (opcode, responseTo)
+	return opcode
 
 -- ** Notice
 
@@ -310,16 +301,16 @@ data ResponseFlag =
 replyOpcode :: Opcode
 replyOpcode = 1
 
-getReply :: Get (ResponseTo, Reply)
+getReply :: Get Reply
 getReply = do
-	(opcode, responseTo) <- getHeader
+	opcode <- getHeader
 	unless (opcode == replyOpcode) $ fail $ "expected reply opcode (1) but got " ++ show opcode
 	rResponseFlags <-  rFlags <$> getInt32
 	rCursorId <- getInt64
 	rStartingFrom <- getInt32
 	numDocs <- fromIntegral <$> getInt32
 	rDocuments <- replicateM numDocs getDocument
-	return (responseTo, Reply{..})
+	return Reply{..}
 
 rFlags :: Int32 -> [ResponseFlag]
 rFlags bits = filter (testBit bits . rBit) [CursorNotFound ..]

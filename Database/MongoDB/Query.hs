@@ -184,12 +184,11 @@ send ns = Action $ do
 	pipe <- asks myPipe
 	liftIOE ConnectionFailure $ P.send pipe ns
 
-call :: (MonadIO m) => [Notice] -> Request -> Action m (ErrorT Failure IO Reply)
+call :: (MonadIO m) => [Notice] -> Request -> Action m Reply
 -- ^ Send notices and request as a contiguous batch to server and return reply promise, which will block when invoked until reply arrives. This call will throw 'ConnectionFailure' if pipe fails on send, and promise will throw 'ConnectionFailure' if pipe fails on receive.
 call ns r = Action $ do
 	pipe <- asks myPipe
-	promise <- liftIOE ConnectionFailure $ P.call pipe ns r
-	return (liftIOE ConnectionFailure promise)
+	liftIOE ConnectionFailure $ P.call pipe ns r
 
 -- | If you stack a monad on top of 'Action' then make it an instance of this class and use 'liftDB' to execute a DB Action within it. Instances already exist for the basic mtl transformers.
 class (Monad m, MonadBaseControl IO (BaseMonad m), Applicative (BaseMonad m), Functor (BaseMonad m)) => MonadDB m where
@@ -532,8 +531,8 @@ data Batch = Batch Limit CursorId [Document]
 request :: (MonadIO m) => [Notice] -> (Request, Limit) -> Action m DelayedBatch
 -- ^ Send notices and request and return promised batch
 request ns (req, remainingLimit) = do
-	promise <- call ns req
-	return $ fromReply remainingLimit =<< promise
+	result <- call ns req
+	return $ fromReply remainingLimit result
 
 fromReply :: Limit -> Reply -> DelayedBatch
 -- ^ Convert Reply to Batch or Failure
